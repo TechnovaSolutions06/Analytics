@@ -293,100 +293,87 @@ exports.exam = async (req, res) => {
     const userID = await profileID(req.headers.authorization);
     const user = await profile(userID);
     const clg = await college(user?.college);
-    const dept = user?.department || [];
+    const dept = await department(user?.department);
   
-    const exams = await Exam.find({ college: user?.college, department: { $in: dept } }, { __v: 0 });
+    const exams = await Exam.find({ college: user?.college, department: user?.department }, {__v:0});
     const examList = await Promise.all(exams.map(async (exam) => {
-        const start = exam?.start;
-        const end = exam?.end;
+      const start = exam?.start;
+      const end = exam?.end;
       
-        const status = getTimeStatus(start, end);
-        const date = formatDateWithMonthAndTime(exam.date).split(',');
-        const startTime = formatDateTime(start);
-        const endTime = formatDateTime(end);
-        const attended = await Performance.findOne({ studentid: userID, examid: exam?._id });
-      
-        return {
-            _id: exam?._id,
-            title: exam?.title,
-            status: status,
-            date: date[0],
-            start: startTime,
-            end: endTime,
-            duration: exam?.duration,
-            category: exam?.exam,
-            sections: (exam?.sections).length,
-            attendStatus: status,
-        };
+      var status = getTimeStatus(start, end);
+      const date = formatDateWithMonthAndTime(exam.date).split(',');
+      const startTime = formatDateTime(start);
+      const endTime = formatDateTime(end);
+      const Attended = await Performance.findOne({studentid:userID,examid:exam?._id})
+      var status;
+      return {
+        _id: exam?._id,
+        title: exam?.title,
+        status: status,
+        date: date[0],
+        start: startTime,
+        end: endTime,
+	    duration: exam?.duration,
+        category: exam?.exam,
+        sections: (exam?.sections).length,
+        attendStatus: status,
+      };
     }));
 
     return res.json({ exams: examList });
 };
+
 /*
 - Get the exam detail
 - Not the question
 - Just the start, time and type of exam.
 */
-exports.examDetail = async (req, res) => {
-    try {
-        const { examID } = req.params;
-        const userID = await profileID(req.headers.authorization);
-        const user = await profile(userID);
-        const exam = await Exam.findOne({ _id: examID });
-
-        if (!exam) {
-            return res.json({ status: "No exam id found" });
-        }
-
-        const departments = await Department.find({ _id: { $in: exam.department } });
-
-        // Check if the user belongs to any of the departments associated with the exam
-        const userInDepartment = departments.some(department => 
-            user.department.includes(department._id.toString())
-        );
-
-        if (!userInDepartment) {
-            return res.status(403).json({ error: "You are not authorized to view this exam" });
-        }
-        const questions = await Promise.all(
-            exam.sections.map(async (section) => {
-                const sec = await Section.findOne({ _id: section }, { 'questions.answer': 0 });
-                const timerExist = await Timer.findOne({ examid: examID, sectionid: sec?._id, studentid: userID });
-                if (timerExist) {
-                    sec.timeLeft = ((new Date().getTime() - new Date(timerExist?.startTime).getTime()) / 60000);
-                }
-                return sec;
-            })
-        );
-        const college = await College.findOne({ _id: exam?.college });
-        return res.json({
-            title: exam.title,
-            college: college.college,
-            departments: departments.map(department => ({
-                _id: department._id,
-                department: department.department,
-                year: department.year,
-                semester: department.semester,
-                section: department.section,
-            })),
-            date: formatDateWithMonthAndTime(exam.date).split(',')[0],
-            start: formatDateTime(exam?.start),
-            end: formatDateTime(exam?.end),
-            status: getTimeStatus(exam?.start, exam?.end),
-            category: exam?.exam,
-            sections: questions,
-            update: "Remaining timing will be updated soon"
-        });
-    } catch (error) {
-        console.error('Error fetching exam details:', error);
-        return res.status(500).json({ error: 'Internal server error' });
+exports.examDetail = async (req,res) => {
+    const {examID} = req.params;
+    const userID = await profileID(req.headers.authorization);
+    const user = await profile(userID);
+    const exam = await Exam.findOne({_id:examID});
+    if(!exam) {
+        return res.json({status:"No exam id found"});
     }
-};
+    const question = await Promise.all(
+        (exam.sections).map(async (section) => {
+            const sec = await Section.findOne({_id:section},{'questions.answer':0});
+            var timerExist = await Timer.findOne({examid:examID,sectionid:sec?._id,studentid:userID});
+            if(timerExist) {
+                sec.timeLeft = ((new Date().getTime() - new Date(timerExist?.startTime).getTime()) / 60000); 
+                return sec;
+            }
+            return sec;
+        })
+    )
+    const college = await College.findOne({_id:exam?.college});
+    const department = await Department.findOne({_id:exam?.department})
+
+    return res.json({
+        title:exam.title,
+        college: college.college,
+        department: department?.department,
+        year: department?.year,
+        semester: department?.semester,
+        section: department?.section,
+        date: formatDateWithMonthAndTime(exam.date).split(',')[0],
+        start: formatDateTime(exam?.start),
+        end: formatDateTime(exam?.end),
+        status:getTimeStatus(exam?.start,exam?.end),
+	    category: exam?.exam,
+        sections: question,
+        update:"Remaining timing will be update soon"
+    });
+}
+  
 /*
 - Get the exam deatils
 - Student panel access.
 - Also get the coding question of the corresponding type such as mcq and coding.
 */
+
+
 exports.examStart = async (req,res) => {
     const { examID,sectionID } = req.params;
     var exam = await Exam.findOne({_id: examID});
@@ -437,7 +424,9 @@ exports.examStart = async (req,res) => {
                             questionsArray.push(qn)
                         }
                     }
-                    // Filter the questions first: 
+
+                    // Filter the questions first:
+                    
                     const sectionJson = {
                         _id: sectionID,
                         name: section.name,
@@ -471,6 +460,7 @@ exports.examStart = async (req,res) => {
                         }
                     }
                     // Filter the questions first:
+                    
                     const sectionJson = {
                         _id: sectionID,
                         name: section?.name,
@@ -488,7 +478,10 @@ exports.examStart = async (req,res) => {
         else {
             return res.json({status:'You timing for exam is over.'})
         }
-    }   
+
+
+    }
+    
 }
 
 exports.examEval = async(req,res) => {
@@ -613,18 +606,6 @@ exports.examSubmit = async(req,res) => {
 
     const userID = await profileID(req.headers.authorization);
     const user = await profile(userID)
-
-    const UpdateScoreBoard = async (user, examID, sectionID, category, overPoint, rating) => {
-        console.log(`Updating scoreboard for user: ${user._id}, exam: ${examID}, section: ${sectionID}, category: ${category}, overPoint: ${overPoint}, rating: ${rating}`);
-        // Logic for updating the scoreboard
-        await ScoreBoard.updateOne(
-            { userID: user._id, examID: examID, sectionID: sectionID },
-            { $set: { category: category, overPoint: overPoint, rating: rating } },
-            { upsert: true }
-        );
-    };
-    
-    
 
     var timerExist = await Timer.findOne({examid:examID,sectionid:sectionID,studentid:userID});
     if(!timerExist) {
@@ -810,64 +791,33 @@ exports.event = async(req,res) =>  {
 - Student panel access.
 - ALl the student of the department scorepoint will be return.
 */
-// Regular scoreboard endpoint for students
 exports.scoreboard = async (req, res) => {
-    try {
-        const userID = await profileID(req.headers.authorization);
-        console.log('User ID:', userID);
-
-        const user = await profile(userID);
-        console.log('User Profile:', user);
-
-        // Ensure user and user.college are defined
-        if (!user || !user.college) {
-            return res.status(400).json({ error: 'User or college not found' });
-        }
-
-        const clg = await College.findOne({ _id: user.college });
-        console.log('College:', clg);
-
-        // Ensure college is defined
-        if (!clg) {
-            return res.status(400).json({ error: 'College not found' });
-        }
-
-        const users = await Student.find({ college: user.college });
-        const std = [];
-
-        for (const stud of users) {
-            const department = await Department.findOne({ _id: stud.department });
-
-            // Check if the department exists
-            if (!department) {
-                console.warn(`Department not found for student ID: ${stud._id}`);
-                continue; // Skip this student if the department is not found
-            }
-
-            const studentDetails = {
-                studentid: stud._id,
-                register: stud.register,
-                rollno: stud.rollno,
-                name: stud.name,
-                college: clg.college,
-                department: department.department,
-                year: department.year,
-                semester: department.semester,
-                section: department.section,
-                score: stud.OAScore,
-            };
-
-            std.push(studentDetails);
-        }
-
-        return res.json({ score: std });
-    } catch (error) {
-        console.error('Error fetching scoreboard details:', error);
-        return res.status(500).json({ error: 'Internal server error' });
+    const userID = await profileID(req.headers.authorization);
+    const user = await profile(userID);
+    const clg = await College.findOne({ _id: user.college });
+    const users = await Student.find({ college: user.college });
+    var std = new Array();
+  
+    for (const stud of users) {
+      const deptname = await Department.findOne({ _id: stud.department });
+  
+      const json = {
+        register: stud.register,
+	    rollno: stud.rollno,
+        name: stud.name,
+        college: clg.college,
+        department: deptname.department,
+        year: deptname.year,
+        semester: deptname.semester,
+        section: deptname.section,
+        score: stud.OAScore,
+      };
+  
+      std.push(json);
     }
-};
-
-
+  
+    return res.json({ score: std });
+  };
 // Admin scoreboard endpoint to view all students' scores
 exports.adminScoreboard = async (req, res) => {
     try {
@@ -921,6 +871,7 @@ exports.adminScoreboard = async (req, res) => {
         return res.status(500).json({ error: 'Internal server error' });
     }
 };
+
 /*
 Evaluate the question.
 - Identify the user detail with the token, which have the user id.
@@ -935,6 +886,10 @@ Evaluate the question.
 - The Same input array function is repeated for testcase array. But incorrect is replaced with testcase fail.
 - Finally return the output of the code.
 */
+
+
+
+
 exports.evaluate = async (req,res) => {
     const {examID} = req.params;
     const exam = await Exam.findOne({id:examID});
@@ -1278,4 +1233,3 @@ exports.timeout = async(req,res) => {
 		return res.json({status:"timeout"});
 	}
 }
-
