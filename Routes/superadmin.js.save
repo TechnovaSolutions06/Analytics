@@ -1,0 +1,430 @@
+// Libraries
+const mongoose = require("mongoose");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken")
+const secret = process.env.secret;
+
+// Schema
+const User = require("../Schema/superadmin")
+const College = require("../Schema/college")
+const Department = require("../Schema/department")
+const Exam = require("../Schema/events")
+const Event = require("../Schema/techevent")
+const MCQDB = require("../Schema/mcq")
+const CodeDB = require("../Schema/programming")
+const Student = require("../Schema/user")
+const Admin = require("../Schema/admin")
+// Routes
+const MCQ = require("./mcqs")
+const Code = require("./CodingQN")
+
+async function profileID(token) {
+    var tok = token.headers.authorization;
+    var id;
+    try {
+        tok = tok.slice(7,tok.length)
+        console.log(tok);
+        console.log(secret);
+        id = jwt.verify(tok, secret);
+    }
+    catch(err) {
+        id = null;
+    }
+
+    const user = await User.findOne({_id:id.id});
+    if(user) {
+        return user;
+    }
+    else {
+        return null;
+    }
+}
+
+async function departmentName(id) {
+    const dept = await Department.findOne({_id: id});
+    if(!dept) {
+        return null;
+    }
+    else {
+        return dept;
+    }
+}
+
+async function CollegeName(id) {
+    const college = await College.findOne({_id:id})
+    if(!college) {
+        return null;
+    }
+    else {
+        return college;
+    }
+}
+
+async function examStatus(start, end) {
+    const timeNow = new Date().getTime();
+    if( start >= timeNow && end <= timeNow) {
+        return "Ongoing";
+    }
+    if( end>= timeNow) 
+        return "Ended";
+    else
+        return "Upcoming";
+}
+
+async function scoreof(examID, type, students) {
+    const studentDetail = new Array();
+for( const student of students ){
+    if(type == "MCQ") {
+        const exams = student.exams;
+        var found = false;
+        for(const exam of exams) {
+            if( exam.examID == examID) {
+                const json = {
+                    _id: student._id,
+                    name: student.name,
+                    rollno: student.rollno,
+                    email: student.email,
+                    score: exam.score,
+                }
+                found = true;
+                studentDetail.push(json);
+            }
+        }
+        if(!found) {
+            const json = {
+                _id: student._id,
+                name: student.name,
+                rollno: student.rollno,
+                email: student.email,
+                score: 0,
+            }
+            studentDetail.push(json);
+        }
+    }
+
+    else {
+        var exams = student.codeExam;
+        var found = false;
+        var score = 0;
+        for( const exam of exams) {
+            if( exam.examID == examID) {
+                const Ex = await CodeDB.findOne({examID:examID, number: exam.number});
+        console.log(Ex);
+                score += Ex.rating;
+            }
+        }
+        const json = {
+            _id: student._id,
+            name: student.name,
+            rollno: student.rollno,
+            email: student.email,
+            score: score,
+        }
+        studentDetail.push(json);
+    }
+}
+return studentDetail;
+}
+
+
+/*
+- Listout the exams allocated for the department of their students.
+- Both mcq and coding exams.
+*/
+exports.exam = async(req,res) => {
+    const user = await profileID(req);
+    try {
+        const exams = await Exam.find({college:user.college});
+        var examList = new Array();
+
+        for(const a of exams) {
+            console.log(a)
+            const clgName = await CollegeName(a.college);
+            const dept = await Department.findOne({_id:a.department});
+       	    if(!dept || !clgName ){
+		console.log(clgName,a.depart)
+		console.log("NULL")
+		continue;
+	  }
+	   else {
+	   	console.log("NESTED")
+		  examList.push({
+                _id: a.id,
+       		id:a.id,
+	         title: a.title,
+                college: clgName.college,
+                department: dept.department,
+                year: dept.year,
+                semester: dept.semester,
+                section: dept.section,
+                hours: a.hours,
+                minutes: a.minutes,
+                date: a.date,
+                start: a.start,
+                end: a.end,
+		status: await examStatus(a.start,a.end),
+                category:a.exam,
+            })
+	  }
+        }
+        return res.json({exams:examList})
+    }
+    catch(err) {
+        console.log(err)
+        return res.json({exams: "Error",err:err})
+    }
+}
+exports.examDetail = async (req,res) => {
+    const {examID} = req.params;
+
+    const exam = await Exam.findOne({id:examID});
+    console.log(exam,examID)
+    const college = await College.findOne({_id:exam.college});
+    const department = await Department.findOne({_id:exam.department})
+
+    const students = await Student.find({ college: exam.college, department: exam.department }, { __v: 0,department:0,college:0, username: 0, password: 0, role: 0 }).sort({ name: 'asc' });
+    const student = await scoreof(examID,exam.exam, students);
+
+    return res.json({title:exam.title,
+        college: college.college,
+        department: department.department,
+        year: department.year,
+        semester: department.semester,
+        section: department.section,
+        date: exam.date,
+        start: exam.start,
+        end: (exam.end),
+        category: exam.exam,
+        students: student});
+};
+
+
+/*
+Superadmin Panel Access.
+-------------------
+
+- Create a new exams
+- Generate a unique ID for exam.
+- Also the call the mcq or coding function to save the question in corresponding database.
+*/
+exports.newExam = async (req,res) => {
+    const user = await profileID(req);
+    const { title, date, start, end, hours, minutes, department, exam, questions } = req.body;
+    var examID = await new Date().getTime();
+
+    var newExam = await Event({
+        id: examID,
+        title: title,
+        exam: exam,
+        college: user.college,
+        department: department,
+        date: date,
+        start: start,
+        end: end,
+        hours: hours,
+        minutes: minutes,
+	ansVis: 
+    })
+
+    newExam.save().then(async(data) => { 
+
+        if(exam == "MCQ") 
+            var res = await MCQ.add(questions, examID);
+        else if(exam == "Coding") 
+            var res = await Code.add(questions, examID);
+
+        if(res != 1)
+            return res.json({status:"Added Exam"})
+        else 
+            return res.json({status:"Exam Added, but questions not added. Something went wrong"});
+    
+    }).catch((err) => {return res.json({status:"Something exam"})});
+}
+
+/*
+- Create a new department for their college.
+- The collection have department, year, semester and section.
+- Database name is departments.
+*/
+exports.newDept = async(req,res) => {
+    const user = await profileID(req);
+    const { department, year, semester, section } = req.body;
+    const clg = await Department({
+        college: user.college,
+        department: department,
+        year: year,
+        semester: semester,
+        section: section,
+    });
+
+    clg.save()
+    .then((data) => {return res.json({status:"Added Department"})})
+    .catch((err) => {return res.json({status:"Something went wrong"})})
+}
+
+/*
+- Get all the department of their college.
+- Return the department name, year, semester and section and college name
+*/
+exports.dept = async(req,res) => {
+    const user = await profileID(req);
+    const college = await user.college;
+    const department = await Department.find({college: college});
+    return res.json({department: department});
+}
+
+exports.delDept = async(req,res) => {
+	const departmentID = req.params.departmentID;
+	const process = await Department.findOneAndDelete({_id:departmentID})
+	return res.json({status:"Deleted"})
+}
+/*
+- Get all the student detail of the specific department on their college.
+- Return the user deatils such as name, username, email, Overall score and roll number.
+*/
+exports.student = async(req,res) => {
+    const user = await profileID(req);
+    const college = user.college;
+    const department = req.params.departmentID;
+    const student = await Student.find({college: college, department: department});
+    const stu = new Array();
+    const clg = await College.findOne({_id:college});
+    const dept = await Department.findOne({_id:department});
+    for(const a of student) {
+	stu.push({
+		_id:a._id,
+		name:a.name,
+		username:a.username,
+		rollno:a.rollno,
+		email: a.email,
+		OAScore:a.OAScore
+    })
+   }
+    return res.json({students:stu,college:clg.college,department:dept.department,year:dept.year,semester:dept.semester,section:dept.section})
+}
+
+/*
+New Student.
+- POST Request
+- Create a new user, 
+*/
+exports.newStudent = async(req,res) => {
+    const user = await profileID(req);
+    const department = req.params.departmentID;
+    const { name, username, email, password, rollno } = req.body;
+    const college = user.college;
+
+    const student = await Student({
+        name: name,
+        username: username,
+        email: email,
+        password: await bcrypt.hash(password,5),
+        rollno: rollno,
+        college: college,
+        department: department,
+        role: "student",
+        OAScore: 0,
+        codeExam: new Array(),
+        exams: new Array(),
+        completion: new Array(),
+    });
+
+    user.save()
+    .then( (data) => res.status(200).send({response:"Successfully created a user "}))
+    .catch( (err) => res.status(301).send({response:"Something went wrong"}));
+}
+
+/*
+- Listout the events allocated for the department of their students.
+*/
+exports.event = async(req,res) => {
+    const user = await profileID(req);
+    const tech = await Event.find({college:user.college})
+    if(tech) {
+        return res.json({event: tech});
+    }
+    else {
+        return res.json({event:"No event"});
+    }
+}
+
+exports.profile = async(req,res) => {
+    const user = await profileID(req);
+    const exam = await Exam.find({college:user.college});
+    const student = await Student.find({college: user.college}).sort({OAScore:-1});
+    const exams = new Array();
+    for(const ex of exam) {
+        const status = await examStatus(ex.start, ex.end);
+
+        const json = {
+            id: ex.id,
+            title: ex.title,
+            date: ex.date,
+            start: ex.start,
+            end: ex.end,
+            category: ex.exam,
+            status: status,
+            hours: ex.hours,
+            minutes: ex.minutes,
+        }
+    }
+    return res.json({exam: exams, student: student})
+
+}
+
+
+exports.getSA = async(req,res) => {
+    const superadmin = await User.find({});
+    var user = new Array(); 
+    for(const a of superadmin) {
+        user.push({
+            _id: a._id,
+            college: (await CollegeName(a.college)).college,
+            name: a.name,
+            username: a.username,
+            email: a.email,
+        })
+    }
+    return res.json({superadmins:user})
+}
+
+exports.getSAS = async(req,res) => {
+    const { superadminID } = req.params;
+    const superadmin = await User.findOne({_id:superadminID});
+    return res.json({superadmins:superadmin});
+}
+
+exports.delSAS = async(req,res) => {
+    const { superadminID } = req.params;
+    const superadmin = await User.findOneAndDelete({_id:superadminID});
+    return res.json({status:"Deleted a superadmin user"});
+}
+
+exports.getDept = async(req,res) => {
+console.log("helo")
+    const user = await profileID(req);
+    const college = await user.college;
+    const departmentID = req.params.departmentID
+    const students = await User.find({college: college, department: departmentID});
+    var student = new Array();
+    for(const a of students) {
+        var b = await departmentName(a.department)
+        student.push({
+            name: a.name,
+            username: a.username,
+            rollno: a.enroll,
+            email: a.email,
+            college: (await CollegeName(a.college)).college,
+            department: b.department,
+            year: b.year,
+            semester: b.semester,
+            section: b.section
+        })
+    }
+    return res.json({students: student});
+}
+
+exports.getAD = async(req,res) => {
+    const admins = await Admin.find({},{password:0});
+    return res.json({admins:admins})
+}
